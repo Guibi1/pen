@@ -1,6 +1,26 @@
-use crate::{HOME_DIR, PEN_DIR, TMP_DIR, PYTHON_VERSIONS_DIR};
-use std::{fs, io::{self, Write}, path::PathBuf, process};
+use semver::Version;
 
+use crate::{HOME_DIR, PACKAGES_DIR, PEN_DIR, PYTHON_VERSIONS_DIR, TMP_DIR};
+use std::{
+    fs,
+    io::{self, Write},
+    path::PathBuf,
+    process,
+};
+
+pub fn user_string_to_version(version: Option<&String>) -> Version {
+    match version {
+        Some(version) => {
+            assert_major_minor_patch(version);
+            match Version::parse(version) {
+                Ok(version) => version,
+                Err(_) => abort(&format!("Version {} is invalid", version), None), // TODO: error?
+            }
+        }
+        // TODO: Ask the user? Or maybe pick the most recent version?
+        None => Version::parse("3.12.3").unwrap(),
+    }
+}
 
 /// Asserts that a given version string adheres to the "major.minor.patch" format.
 ///
@@ -32,7 +52,6 @@ pub fn assert_major_minor_patch(py_version: &str) {
     }
 }
 
-
 /// Constructs the path to the directory for a specified Python version without validating the format of the version string.
 ///
 /// # Arguments
@@ -50,11 +69,12 @@ pub fn assert_major_minor_patch(py_version: &str) {
 ///
 /// # Limitations
 /// - The function does not validate the contents of the constructed path or its existence.
-pub fn get_version_path(py_version: &str) -> PathBuf {
-    let py_version_dir_name = format!("python_{}", py_version);
-    return PYTHON_VERSIONS_DIR.join(py_version_dir_name);
+pub fn get_version_path(py_version: &Version) -> PathBuf {
+    PYTHON_VERSIONS_DIR.join(format!(
+        "{}.{}.{}",
+        py_version.major, py_version.minor, py_version.patch
+    ))
 }
-
 
 /// Prompts the user to confirm an action.
 ///
@@ -82,7 +102,6 @@ pub fn confirm_action(prompt: &str) -> bool {
 
     return user_input.trim().eq_ignore_ascii_case("y");
 }
-
 
 /// Downloads a file from a specified URL to a given file path. If a file already exists at the specified path, it will be deleted before the new file is downloaded
 ///
@@ -123,15 +142,28 @@ pub fn download_file(file_url: &str, file_path: &PathBuf) {
         .status()
     {
         Ok(status) if status.success() => (),
-        Ok(_) => abort(&format!("Failed to download file from {} to {}", file_url, file_path.display()), None),
-        Err(e) => abort(&format!("Failed to extract Python version {} to {}", file_url, file_path.display()), Some(e)),
+        Ok(_) => abort(
+            &format!(
+                "Failed to download file from {} to {}",
+                file_url,
+                file_path.display()
+            ),
+            None,
+        ),
+        Err(e) => abort(
+            &format!(
+                "Failed to extract Python version {} to {}",
+                file_url,
+                file_path.display()
+            ),
+            Some(e),
+        ),
     }
 
     if !file_path.exists() || !file_path.is_file() {
         abort("Downloaded file was not found", None);
     }
 }
-
 
 /// Attempts to delete a specified directory.
 ///
@@ -152,7 +184,10 @@ pub fn try_deleting_dir(dir_path: &PathBuf) -> Result<(), std::io::Error> {
     return try_deleting_dir_to_temp(dir_path, &delete_path);
 }
 
-pub fn try_deleting_dir_to_temp(dir_path: &PathBuf, temp_dir: &PathBuf) -> Result<(), std::io::Error> {
+pub fn try_deleting_dir_to_temp(
+    dir_path: &PathBuf,
+    temp_dir: &PathBuf,
+) -> Result<(), std::io::Error> {
     if let Ok(exists) = dir_path.try_exists() {
         if !exists {
             return Ok(());
@@ -161,19 +196,21 @@ pub fn try_deleting_dir_to_temp(dir_path: &PathBuf, temp_dir: &PathBuf) -> Resul
     match temp_dir.try_exists() {
         Ok(true) => fs::remove_dir_all(&temp_dir)?,
         Ok(false) => (),
-        Err(e) => abort(&format!("Unable to know if {} exists", temp_dir.display()), Some(e)),
+        Err(e) => abort(
+            &format!("Unable to know if {} exists", temp_dir.display()),
+            Some(e),
+        ),
     }
     fs::rename(&dir_path, &temp_dir)?;
     if dir_path.try_exists()? {
         Err(io::Error::new(
             io::ErrorKind::Other,
-            "Directory still exists"
+            "Directory still exists",
         ))
     } else {
         Ok(())
     }
 }
-
 
 /// Checks if the specified dependencies are installed by running their `--help` command.
 ///
@@ -202,11 +239,10 @@ pub fn assert_dependencies(dependencies: Vec<&'static str>) {
         {
             Ok(status) if status.success() => continue,
             Ok(_) => abort(&format!("{} is not installed", dep), None),
-            Err(e) => abort(&format!("Failed to check if {} is installed", dep), Some(e))
+            Err(e) => abort(&format!("Failed to check if {} is installed", dep), Some(e)),
         }
     }
 }
-
 
 /// Prints an error message and terminates the process.
 ///
@@ -228,7 +264,6 @@ pub fn abort(message: &str, e: Option<io::Error>) -> ! {
     process::exit(1);
 }
 
-
 /// Prints a critical error message and terminates the process with a status code of 1. The error message is prefixed with "Catastrophic failure: " and is highlighted in bold red text to emphasize the severity.
 ///
 /// # Arguments
@@ -244,13 +279,15 @@ pub fn catastrophic_failure(message: &str, e: Option<io::Error>) -> ! {
     const RED_BOLD: &str = "\x1b[1;31m"; // Bold red text
     const RESET: &str = "\x1b[0m"; // Reset formatting
     if let Some(error) = e {
-        eprintln!("{}Catastrophic failure: {}: {}{}", RED_BOLD, message, error, RESET);
+        eprintln!(
+            "{}Catastrophic failure: {}: {}{}",
+            RED_BOLD, message, error, RESET
+        );
     } else {
         eprintln!("{}Catastrophic failure: {}{}", RED_BOLD, message, RESET);
     }
     process::exit(1);
 } // todo mabye possible to just print RED_BOLD then call abort idk
-
 
 /// Clears and recreates the temporary directory.
 ///
@@ -265,11 +302,17 @@ pub fn catastrophic_failure(message: &str, e: Option<io::Error>) -> ! {
 pub fn clear_temp() {
     if let Err(e) = fs::remove_dir_all(&*TMP_DIR) {
         let _ = fs::create_dir(&*TMP_DIR); // this is to prevent an error loop if TMP_DIR does not exist
-        abort(&format!("Failed to clear directory {}", (*TMP_DIR).display()), Some(e))
+        abort(
+            &format!("Failed to clear directory {}", (*TMP_DIR).display()),
+            Some(e),
+        )
     }
 
     if let Err(e) = fs::create_dir(&*TMP_DIR) {
-        abort(&format!("Failed to create directory {}", (*TMP_DIR).display()), Some(e))
+        abort(
+            &format!("Failed to create directory {}", (*TMP_DIR).display()),
+            Some(e),
+        )
     }
 }
 
@@ -293,13 +336,25 @@ pub fn assert_global_paths() {
     match HOME_DIR.try_exists() {
         Ok(true) => (),
         Ok(false) => abort(&format!("{} does not exist.", HOME_DIR.display()), None),
-        Err(e) => abort(&format!("Failed to check if {} exists", HOME_DIR.display()), Some(e))
+        Err(e) => abort(
+            &format!("Failed to check if {} exists", HOME_DIR.display()),
+            Some(e),
+        ),
     }
 
     match PEN_DIR.try_exists() {
         Ok(true) => (),
-        Ok(false) => abort(&format!("{} does not exist. How did you even do that???", PEN_DIR.display()), None),
-        Err(e) => abort(&format!("Failed to check if {} exists", PEN_DIR.display()), Some(e))
+        Ok(false) => abort(
+            &format!(
+                "{} does not exist. How did you even do that???",
+                PEN_DIR.display()
+            ),
+            None,
+        ),
+        Err(e) => abort(
+            &format!("Failed to check if {} exists", PEN_DIR.display()),
+            Some(e),
+        ),
     }
 
     // no need to check for TEMP_DIR since clear_temp() already handles that
@@ -308,9 +363,37 @@ pub fn assert_global_paths() {
         Ok(true) => (),
         Ok(false) => {
             if let Err(e) = fs::create_dir(&*PYTHON_VERSIONS_DIR) {
-                abort(&format!("Failed to create directory {}", PYTHON_VERSIONS_DIR.display()), Some(e));
+                abort(
+                    &format!(
+                        "Failed to create directory {}",
+                        PYTHON_VERSIONS_DIR.display()
+                    ),
+                    Some(e),
+                );
             }
-        },
-        Err(e) => abort(&format!("Failed to check if {} exists", PYTHON_VERSIONS_DIR.display()), Some(e))
+        }
+        Err(e) => abort(
+            &format!(
+                "Failed to check if {} exists",
+                PYTHON_VERSIONS_DIR.display()
+            ),
+            Some(e),
+        ),
+    }
+
+    match PACKAGES_DIR.try_exists() {
+        Ok(true) => (),
+        Ok(false) => {
+            if let Err(e) = fs::create_dir(&*PACKAGES_DIR) {
+                abort(
+                    &format!("Failed to create directory {}", PACKAGES_DIR.display()),
+                    Some(e),
+                );
+            }
+        }
+        Err(e) => abort(
+            &format!("Failed to check if {} exists", PACKAGES_DIR.display()),
+            Some(e),
+        ),
     }
 }
